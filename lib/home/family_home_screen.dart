@@ -20,6 +20,7 @@ import '../screens/help_request_screens.dart';
 import '../widgets/profile_header.dart';
 import '../widgets/profile_links_widget.dart';
 import '../utils/role_helper.dart';
+import '../screens/buddy_chat_screen.dart';
 
 /// Family Dashboard — Refactored with Bottom Navigation
 class FamilyHomeScreen extends StatefulWidget {
@@ -122,13 +123,24 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen> with PeriodicRefres
       // ── Navigation ────────────────────────────────────────────────────────
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
-        onDestinationSelected: (idx) => setState(() => _selectedIndex = idx),
+        onDestinationSelected: (idx) {
+          if (idx == 1) {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const BuddyChatScreen()));
+            return;
+          }
+          setState(() => _selectedIndex = idx >= 1 ? idx - 1 : idx);
+        },
         indicatorColor: _green1.withOpacity(0.15),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard, color: _green1),
             label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.smart_toy_outlined),
+            selectedIcon: Icon(Icons.smart_toy, color: Color(0xFF1565C0)),
+            label: 'Buddy',
           ),
           NavigationDestination(
             icon: Icon(Icons.grid_view_outlined),

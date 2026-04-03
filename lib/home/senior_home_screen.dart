@@ -14,6 +14,7 @@ import '../widgets/profile_links_widget.dart';
 import '../screens/medicine_detail_screen.dart';
 import '../screens/appointment_detail_screen.dart';
 import '../screens/contact_detail_screen.dart';
+import '../screens/buddy_chat_screen.dart';
 
 /// Senior Dashboard
 ///
@@ -142,28 +143,38 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen> {
       // ── Navigation ────────────────────────────────────────────────────────
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
-        onDestinationSelected: (idx) => setState(() => _selectedIndex = idx),
-        indicatorColor: _purple1.withOpacity(0.15),
+        onDestinationSelected: (idx) {
+          if (idx == 1) {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const BuddyChatScreen()));
+            return;
+          }
+          setState(() => _selectedIndex = idx >= 1 ? idx - 1 : idx);
+        },
+        indicatorColor: _green1.withOpacity(0.15),
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home, color: _purple1),
+            icon: Icon(Icons.dashboard_outlined),
+            selectedIcon: Icon(Icons.dashboard, color: _green1),
             label: 'Home',
           ),
           NavigationDestination(
+            icon: Icon(Icons.smart_toy_outlined),
+            selectedIcon: Icon(Icons.smart_toy, color: Color(0xFF1565C0)),
+            label: 'Buddy',
+          ),
+          NavigationDestination(
             icon: Icon(Icons.grid_view_outlined),
-            selectedIcon: Icon(Icons.grid_view, color: _purple1),
+            selectedIcon: Icon(Icons.grid_view, color: _green1),
             label: 'Features',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person, color: _purple1),
+            selectedIcon: Icon(Icons.person, color: _green1),
             label: 'Profile',
           ),
         ],
       ),
-    );
-  }
+
 
   String get _appBarTitle {
     switch (_selectedIndex) {

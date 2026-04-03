@@ -10,6 +10,7 @@ import '../screens/appointments_screen.dart';
 import '../screens/emergency_contacts_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/edit_profile_screen.dart';
+import '../screens/buddy_chat_screen.dart';
 import '../widgets/profile_header.dart';
 import '../widgets/profile_links_widget.dart';
 
@@ -106,28 +107,38 @@ class _CaretakerHomeScreenState extends State<CaretakerHomeScreen> {
       // ── Navigation ────────────────────────────────────────────────────────
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
-        onDestinationSelected: (idx) => setState(() => _selectedIndex = idx),
-        indicatorColor: _blue1.withOpacity(0.15),
+        onDestinationSelected: (idx) {
+          if (idx == 1) {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const BuddyChatScreen()));
+            return;
+          }
+          setState(() => _selectedIndex = idx >= 1 ? idx - 1 : idx);
+        },
+        indicatorColor: _green1.withOpacity(0.15),
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home, color: _blue1),
+            icon: Icon(Icons.dashboard_outlined),
+            selectedIcon: Icon(Icons.dashboard, color: _green1),
             label: 'Home',
           ),
           NavigationDestination(
+            icon: Icon(Icons.smart_toy_outlined),
+            selectedIcon: Icon(Icons.smart_toy, color: Color(0xFF1565C0)),
+            label: 'Buddy',
+          ),
+          NavigationDestination(
             icon: Icon(Icons.grid_view_outlined),
-            selectedIcon: Icon(Icons.grid_view, color: _blue1),
+            selectedIcon: Icon(Icons.grid_view, color: _green1),
             label: 'Features',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person, color: _blue1),
+            selectedIcon: Icon(Icons.person, color: _green1),
             label: 'Profile',
           ),
         ],
       ),
-    );
-  }
+
 
   String get _appBarTitle {
     switch (_selectedIndex) {
