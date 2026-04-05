@@ -31,6 +31,7 @@ class SeniorHomeScreen extends StatefulWidget {
 }
 
 class _SeniorHomeScreenState extends State<SeniorHomeScreen> {
+  static const Color _green1 = Color(0xFF43A047);
   final ApiService _apiService = ApiService();
   bool _isLoading = true;
   String _userName = 'Senior';
@@ -151,7 +152,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen> {
           setState(() => _selectedIndex = idx >= 1 ? idx - 1 : idx);
         },
         indicatorColor: _green1.withOpacity(0.15),
-        destinations: const [
+        destinations: [
           NavigationDestination(
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard, color: _green1),
@@ -174,6 +175,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen> {
           ),
         ],
       ),
+    );
+  }
 
 
   String get _appBarTitle {

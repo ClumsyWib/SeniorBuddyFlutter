@@ -27,6 +27,7 @@ class CaretakerHomeScreen extends StatefulWidget {
 }
 
 class _CaretakerHomeScreenState extends State<CaretakerHomeScreen> {
+  static const Color _green1 = Color(0xFF43A047);
   final ApiService _apiService = ApiService();
   bool _isLoading = true;
   List<dynamic> _seniors = [];
@@ -115,7 +116,7 @@ class _CaretakerHomeScreenState extends State<CaretakerHomeScreen> {
           setState(() => _selectedIndex = idx >= 1 ? idx - 1 : idx);
         },
         indicatorColor: _green1.withOpacity(0.15),
-        destinations: const [
+        destinations: [
           NavigationDestination(
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard, color: _green1),
@@ -138,6 +139,8 @@ class _CaretakerHomeScreenState extends State<CaretakerHomeScreen> {
           ),
         ],
       ),
+    );
+  }
 
 
   String get _appBarTitle {
