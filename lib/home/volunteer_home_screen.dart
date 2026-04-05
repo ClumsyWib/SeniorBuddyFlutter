@@ -117,7 +117,7 @@ class _VolunteerHomeScreenState extends State<VolunteerHomeScreen> {
           setState(() => _selectedIndex = i);
         },
         indicatorColor: _amber.withOpacity(0.15),
-        destinations: const [
+        destinations: [
           NavigationDestination(
               icon: Icon(Icons.home_outlined),
               selectedIcon: Icon(Icons.home, color: _amber),

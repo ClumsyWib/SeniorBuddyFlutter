@@ -20,7 +20,7 @@ class ApiService {
   // CHANGE THIS based on your setup:
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://192.168.29.156:8000/api',
+    defaultValue: 'https://centrically-arumlike-olen.ngrok-free.dev/api',
   );
 
   // For real device: 'http://YOUR_IP:8000/api'
