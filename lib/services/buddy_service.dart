@@ -7,19 +7,26 @@ class BuddyService {
 
   Future<Map<String, dynamic>> sendMessage(
     String message,
-    List<Map<String, String>> history,
-  ) async {
+    List<Map<String, String>> history, {
+    int? activeSeniorId,
+  }) async {
     final token = await _api.getToken();
     if (token == null) return {'success': false, 'error': 'Not logged in'};
 
     try {
+      final body = {
+        'message': message,
+        'history': history,
+        if (activeSeniorId != null) 'active_senior_id': activeSeniorId,
+      };
+
       final response = await http.post(
         Uri.parse('${ApiService.baseUrl}/ai-chat/'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Token $token',
         },
-        body: jsonEncode({'message': message, 'history': history}),
+        body: jsonEncode(body),
       ).timeout(const Duration(seconds: 15));
 
       final data = jsonDecode(response.body);
@@ -27,6 +34,7 @@ class BuddyService {
         return {
           'success': true,
           'reply': data['reply'],
+          'action_result': data['action_result'],
           'history': List<Map<String, String>>.from(
             (data['history'] as List).map((h) => {
               'role': h['role'].toString(),
