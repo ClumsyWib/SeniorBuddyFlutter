@@ -4,6 +4,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import '../services/buddy_service.dart';
 
 class BuddyChatScreen extends StatefulWidget {
+  final int? activeSeniorId;
   const BuddyChatScreen({Key? key}) : super(key: key);
 
   @override
@@ -91,7 +92,8 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> {
     });
     _scrollToBottom();
 
-    final result = await _buddy.sendMessage(text, _history);
+    final result = await _buddy.sendMessage(text,
+     _history, activeSeniorId: widget.activeSeniorId);
 
     if (mounted) {
       setState(() => _isLoading = false);
@@ -99,6 +101,15 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> {
         final reply = result['reply'] as String;
         _history = result['history'];
         setState(() => _messages.add({'role': 'assistant', 'content': reply}));
+        final actionResult = result['action_result'];
+        if (actionResult != null) {
+          setState(() => _messages.add({
+            'role': 'action',
+            'content': actionResult['message'] ?? '',
+            'success': actionResult['success'].toString(),
+          }));
+        }
+        
         _scrollToBottom();
         _speak(reply);
       } else {
@@ -183,6 +194,7 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> {
                     itemBuilder: (context, index) {
                       if (index == _messages.length) return _buildTypingIndicator();
                       final msg = _messages[index];
+                      if (msg['role'] == 'action') return _buildActionCard(msg['content']!, msg['success'] == 'true');
                       return _buildBubble(msg['content']!, msg['role'] == 'user');
                     },
                   ),
@@ -223,6 +235,27 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> {
       ),
     );
   }
+  Widget _buildActionCard(String text, bool success) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: success ? Colors.green[50] : Colors.red[50],
+        border: Border.all(color: success ? Colors.green : Colors.red, width: 1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(success ? Icons.check_circle : Icons.error_outline,
+              color: success ? Colors.green : Colors.red, size: 18),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: TextStyle(color: success ? Colors.green[800] : Colors.red[800]))),
+        ],
+      ),
+    ),
+  );
+}
 
   Widget _buildInputArea() {
     return Container(
