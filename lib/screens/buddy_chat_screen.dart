@@ -5,7 +5,7 @@ import '../services/buddy_service.dart';
 
 class BuddyChatScreen extends StatefulWidget {
   final int? activeSeniorId;
-  const BuddyChatScreen({Key? key}) : super(key: key);
+  const BuddyChatScreen({Key? key, this.activeSeniorId}) : super(key: key);
 
   @override
   State<BuddyChatScreen> createState() => _BuddyChatScreenState();
