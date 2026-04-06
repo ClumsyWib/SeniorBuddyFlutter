@@ -118,17 +118,21 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen> with PeriodicRefres
       // ── Body ──────────────────────────────────────────────────────────────
       body: _isLoading 
           ? const Center(child: CircularProgressIndicator(color: _green1))
-          : _buildTabContent(),
+          : IndexedStack(
+              index: _selectedIndex,
+              children: [
+                _buildHomeTab(),
+                const BuddyChatScreen(),
+                _buildFeaturesTab(),
+                _buildProfileTab(),
+              ],
+            ),
 
       // ── Navigation ────────────────────────────────────────────────────────
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (idx) {
-          if (idx == 1) {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const BuddyChatScreen()));
-            return;
-          }
-          setState(() => _selectedIndex = idx >= 1 ? idx - 1 : idx);
+          setState(() => _selectedIndex = idx);
         },
         indicatorColor: _green1.withOpacity(0.15),
         destinations: const [
@@ -176,18 +180,10 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen> with PeriodicRefres
   String get _appBarTitle {
     switch (_selectedIndex) {
       case 0: return 'Family Dashboard';
-      case 1: return 'Quick Features';
-      case 2: return 'My Profile';
+      case 1: return 'Buddy';
+      case 2: return 'Quick Features';
+      case 3: return 'My Profile';
       default: return 'Dashboard';
-    }
-  }
-
-  Widget _buildTabContent() {
-    switch (_selectedIndex) {
-      case 0: return _buildHomeTab();
-      case 1: return _buildFeaturesTab();
-      case 2: return _buildProfileTab();
-      default: return _buildHomeTab();
     }
   }
 
