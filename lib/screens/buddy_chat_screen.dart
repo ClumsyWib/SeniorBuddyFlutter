@@ -11,7 +11,7 @@ class BuddyChatScreen extends StatefulWidget {
   State<BuddyChatScreen> createState() => _BuddyChatScreenState();
 }
 
-class _BuddyChatScreenState extends State<BuddyChatScreen> {
+class _BuddyChatScreenState extends State<BuddyChatScreen> with AutomaticKeepAliveClientMixin {
   final BuddyService _buddy = BuddyService();
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -24,6 +24,9 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> {
   bool _isListening = false;
   bool _isMuted = false;
   bool _sttAvailable = false;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -141,6 +144,7 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
       appBar: AppBar(
         title: const Row(
