@@ -19,11 +19,12 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> with AutomaticKeepAli
   final FlutterTts _tts = FlutterTts();
 
   List<Map<String, String>> _history = [];
-  List<Map<String, String>> _messages = []; // for display: role + content
+  List<Map<String, String>> _messages = [];
   bool _isLoading = false;
   bool _isListening = false;
   bool _isMuted = false;
   bool _sttAvailable = false;
+  bool _greetingLoading = true;
 
   @override
   bool get wantKeepAlive => true;
@@ -33,6 +34,7 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> with AutomaticKeepAli
     super.initState();
     _initSpeech();
     _initTts();
+    _loadGreeting();
   }
 
   Future<void> _initSpeech() async {
@@ -46,6 +48,17 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> with AutomaticKeepAli
     await _tts.setLanguage('en-IN');
     await _tts.setSpeechRate(0.45);
     await _tts.setPitch(1.0);
+  }
+
+  Future<void> _loadGreeting() async {
+    final greeting = await _buddy.fetchGreeting();
+    if (mounted) {
+      setState(() {
+        _greetingLoading = false;
+        _messages.add({'role': 'assistant', 'content': greeting});
+      });
+      _speak(greeting);
+    }
   }
 
   Future<void> _speak(String text) async {
@@ -95,30 +108,36 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> with AutomaticKeepAli
     });
     _scrollToBottom();
 
-    final result = await _buddy.sendMessage(text,
-     _history, activeSeniorId: widget.activeSeniorId);
+    final result = await _buddy.sendMessage(
+      text, _history,
+      activeSeniorId: widget.activeSeniorId,
+    );
 
     if (mounted) {
       setState(() => _isLoading = false);
-      if (result['success']) {
+      if (result['success'] == true) {
         final reply = result['reply'] as String;
         _history = result['history'];
         setState(() => _messages.add({'role': 'assistant', 'content': reply}));
+
         final actionResult = result['action_result'];
         if (actionResult != null) {
           setState(() => _messages.add({
             'role': 'action',
             'content': actionResult['message'] ?? '',
             'success': actionResult['success'].toString(),
+            'type': actionResult['type']?.toString() ?? '',
           }));
         }
-        
         _scrollToBottom();
         _speak(reply);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result['error'] ?? 'Error')),
-        );
+        // Inline error bubble — no SnackBar
+        setState(() => _messages.add({
+          'role': 'error',
+          'content': result['error'] ?? 'Something went wrong. Please try again.',
+        }));
+        _scrollToBottom();
       }
     }
   }
@@ -172,36 +191,30 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> with AutomaticKeepAli
       body: Column(
         children: [
           Expanded(
-            child: _messages.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const CircleAvatar(
-                          backgroundColor: Colors.blue,
-                          radius: 36,
-                          child: Text('B', style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text('Hi! I\'m Buddy', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 8),
-                        Text('Your personal care companion', style: TextStyle(color: Colors.grey[600])),
-                        const SizedBox(height: 24),
-                        Text('Tap the mic or type to start talking!', style: TextStyle(color: Colors.grey[400], fontSize: 13)),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(12),
-                    itemCount: _messages.length + (_isLoading ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == _messages.length) return _buildTypingIndicator();
-                      final msg = _messages[index];
-                      if (msg['role'] == 'action') return _buildActionCard(msg['content']!, msg['success'] == 'true');
-                      return _buildBubble(msg['content']!, msg['role'] == 'user');
-                    },
-                  ),
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.all(12),
+              itemCount: _messages.length + (_isLoading ? 1 : 0) + (_greetingLoading ? 1 : 0),
+              itemBuilder: (context, index) {
+                // Show typing indicator while greeting loads
+                if (_greetingLoading && index == 0) return _buildTypingIndicator();
+                final msgIndex = _greetingLoading ? index - 1 : index;
+                if (msgIndex == _messages.length) return _buildTypingIndicator();
+                final msg = _messages[msgIndex];
+                switch (msg['role']) {
+                  case 'action':
+                    return _buildActionCard(
+                      msg['content']!,
+                      msg['success'] == 'true',
+                      msg['type'] ?? '',
+                    );
+                  case 'error':
+                    return _buildErrorBubble(msg['content']!);
+                  default:
+                    return _buildBubble(msg['content']!, msg['role'] == 'user');
+                }
+              },
+            ),
           ),
           _buildInputArea(),
         ],
@@ -239,32 +252,138 @@ class _BuddyChatScreenState extends State<BuddyChatScreen> with AutomaticKeepAli
       ),
     );
   }
-  Widget _buildActionCard(String text, bool success) {
-  return Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: success ? Colors.green[50] : Colors.red[50],
-        border: Border.all(color: success ? Colors.green : Colors.red, width: 1),
-        borderRadius: BorderRadius.circular(12),
+
+  Widget _buildActionCard(String text, bool success, String type) {
+    final config = _actionConfig(type, success);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: config['bgColor'] as Color,
+          border: Border.all(color: config['borderColor'] as Color, width: 1),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: (config['borderColor'] as Color).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(config['icon'] as IconData, color: config['borderColor'] as Color, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    config['label'] as String,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: config['borderColor'] as Color,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    text,
+                    style: TextStyle(fontSize: 14, color: config['textColor'] as Color),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
-      child: Row(
-        children: [
-          Icon(success ? Icons.check_circle : Icons.error_outline,
-              color: success ? Colors.green : Colors.red, size: 18),
-          const SizedBox(width: 8),
-          Expanded(child: Text(text, style: TextStyle(color: success ? Colors.green[800] : Colors.red[800]))),
-        ],
+    );
+  }
+
+  Map<String, dynamic> _actionConfig(String type, bool success) {
+    if (!success) {
+      return {
+        'icon': Icons.error_outline,
+        'label': 'Action failed',
+        'bgColor': Colors.red[50]!,
+        'borderColor': Colors.red[400]!,
+        'textColor': Colors.red[800]!,
+      };
+    }
+    switch (type) {
+      case 'create_appointment':
+        return {
+          'icon': Icons.calendar_today_rounded,
+          'label': 'Appointment scheduled',
+          'bgColor': Colors.blue[50]!,
+          'borderColor': Colors.blue[400]!,
+          'textColor': Colors.blue[900]!,
+        };
+      case 'create_medicine':
+        return {
+          'icon': Icons.medication_rounded,
+          'label': 'Medicine added',
+          'bgColor': Colors.teal[50]!,
+          'borderColor': Colors.teal[400]!,
+          'textColor': Colors.teal[900]!,
+        };
+      case 'sos':
+        return {
+          'icon': Icons.warning_amber_rounded,
+          'label': 'SOS alert sent',
+          'bgColor': Colors.orange[50]!,
+          'borderColor': Colors.orange[600]!,
+          'textColor': Colors.orange[900]!,
+        };
+      default:
+        return {
+          'icon': Icons.check_circle_outline,
+          'label': 'Done',
+          'bgColor': Colors.green[50]!,
+          'borderColor': Colors.green[400]!,
+          'textColor': Colors.green[900]!,
+        };
+    }
+  }
+
+  Widget _buildErrorBubble(String text) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.80),
+        decoration: BoxDecoration(
+          color: Colors.grey[100],
+          borderRadius: BorderRadius.circular(16).copyWith(bottomLeft: Radius.zero),
+          border: Border.all(color: Colors.grey[300]!),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.wifi_off_rounded, size: 15, color: Colors.grey[500]),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                text,
+                style: TextStyle(fontSize: 14, color: Colors.grey[600], fontStyle: FontStyle.italic),
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildInputArea() {
     return Container(
       padding: const EdgeInsets.all(8),
-      decoration: const BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)]),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+      ),
       child: Row(
         children: [
           GestureDetector(

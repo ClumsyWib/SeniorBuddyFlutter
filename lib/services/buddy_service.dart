@@ -5,6 +5,24 @@ import 'api_service.dart';
 class BuddyService {
   final ApiService _api = ApiService();
 
+  Future<String> fetchGreeting() async {
+    final token = await _api.getToken();
+    if (token == null) return "Hello! I'm Buddy. How can I help you today?";
+
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiService.baseUrl}/ai-chat/greeting/'),
+        headers: {'Authorization': 'Token $token'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['greeting'] ?? "Hello! I'm Buddy. How can I help you today?";
+      }
+    } catch (_) {}
+    return "Hello! I'm Buddy. How can I help you today?";
+  }
+
   Future<Map<String, dynamic>> sendMessage(
     String message,
     List<Map<String, String>> history, {
@@ -27,7 +45,7 @@ class BuddyService {
           'Authorization': 'Token $token',
         },
         body: jsonEncode(body),
-      ).timeout(const Duration(seconds: 15));
+      ).timeout(const Duration(seconds: 30));
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200) {
