@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "434527425080",
+    "project_id": "seniorbuddy-aecc0",
+    "storage_bucket": "seniorbuddy-aecc0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:434527425080:android:41b14279048d9b8cec8ccd",
+        "android_client_info": {
+          "package_name": "com.example.seniorbuddy1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBsX3cDbgMPINVaP4Nr9NwmsT67Bcr3xs4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
