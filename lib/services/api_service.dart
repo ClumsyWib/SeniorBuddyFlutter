@@ -19,8 +19,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ApiService {
   // CHANGE THIS based on your setup:
   static const String baseUrl = String.fromEnvironment(
+    // Use 10.0.2.2 for Android Emulator, localhost for iOS Simulator,
+    // or your machine's IP (e.g., 192.168.x.x) for real devices.
     'API_BASE_URL',
-    defaultValue: 'https://centrically-arumlike-olen.ngrok-free.dev/api',
+    defaultValue: 'https://fibrilliform-unconcurred-trinity.ngrok-free.dev/api',
   );
 
   // For real device: 'http://YOUR_IP:8000/api'
@@ -72,14 +74,76 @@ class ApiService {
   }
 
   // Get headers with authentication
-  Future<Map<String, String>> getHeaders() async {
-    final token = await getToken();
+  Future<Map<String, String>> getHeaders({bool requireAuth = true}) async {
+    final token = requireAuth ? await getToken() : null;
     return {
       'Content-Type': 'application/json',
+      'ngrok-skip-browser-warning': 'true', // Bypasses ngrok warning page
       if (token != null) 'Authorization': 'Token $token',
     };
   }
 
+  // Register device token for push notifications
+  Future<Map<String, dynamic>> registerDeviceToken(String token, {bool isSeniorDevice = false}) async {
+    try {
+      final headers = await getHeaders();
+      
+      final body = {
+        'token': token,
+        'device_type': Platform.isAndroid ? 'android' : 'ios',
+        'is_senior_device': isSeniorDevice,
+      };
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/device-tokens/'),
+        headers: headers,
+        body: jsonEncode(body),
+      );
+
+      print("📤 Sending FCM Token: $token");
+      print("📥 Status Code: ${response.statusCode}");
+      print("📥 Response: ${response.body}");
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        print("🟢 Token registered successfully");
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+
+      return {
+        'success': false,
+        'error': 'Failed to register token: ${response.body}'
+      };
+    } catch (e) {
+      print("🔴 Token registration error: $e");
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+  
+  /// 🔹 Unregister FCM Token on Logout
+  Future<Map<String, dynamic>> unregisterDeviceToken(String token) async {
+    try {
+      final String? authToken = await getToken();
+      if (authToken == null) return {'success': false, 'error': 'No auth token'};
+
+      final url = '$baseUrl/device-tokens/unregister/';
+      print('📤 Unregistering FCM Token: $token');
+
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Token $authToken',
+        },
+        body: jsonEncode({'token': token}),
+      );
+
+      print('📥 Unregister Response: ${response.statusCode}');
+      return {'success': response.statusCode == 200};
+    } catch (e) {
+      print('🔴 Unregister error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
 
   // ==================== AUTHENTICATION ====================
 
@@ -124,14 +188,19 @@ class ApiService {
         try {
           error = jsonDecode(response.body);
         } catch (e) {
-          error = 'Server returned non-JSON response (Status ${response.statusCode}). Body: ${response.body.substring(0, response.body.length > 500 ? 500 : response.body.length)}';
+          error =
+              'Server returned non-JSON response (Status ${response.statusCode}). Body: ${response.body.substring(0, response.body.length > 500 ? 500 : response.body.length)}';
         }
         print('🔴 Registration failed: $error');
         return {'success': false, 'error': error};
       }
     } catch (e) {
       print('🔴 Registration error: $e');
-      return {'success': false, 'error': 'Connection error: $e'};
+      return {
+        'success': false,
+        'error':
+            'Network connection error. Please ensure the server is running and accessible at $baseUrl'
+      };
     }
   }
 
@@ -142,10 +211,11 @@ class ApiService {
   }) async {
     try {
       print('🔵 Logging in: $username');
+      final headers = await getHeaders(requireAuth: false);
 
       final response = await http.post(
         Uri.parse('$baseUrl/auth/login/'),
-        headers: {'Content-Type': 'application/json'},
+        headers: headers,
         body: jsonEncode({
           'username': username,
           'password': password,
@@ -156,21 +226,194 @@ class ApiService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        
+        // Handle 2FA detection
+        if (data['requires_2fa'] == true) {
+          print('🔐 2FA required for user: ${data['username']}');
+          return {
+            'success': true, 
+            'requires_2fa': true, 
+            'username': data['username'] ?? username,
+            'email': data['email'], // Capture email if provided
+            'message': data['message'] ?? 'Please verify your identity.'
+          };
+        }
+
         await saveToken(data['token']);
+        await saveUserId(data['user_id']);
 
-        String userType = data['user_type'] ?? '';
+        final userType = data['user_type'];
+        bool roleMatch = (role == userType);
 
-        return {
-          'success': true,
-          'token': data['token'],
-          'role_handled_properly': true,
-        };
+        if (!roleMatch) {
+          print('⚠️ Role mismatch: Logging in as $userType instead of $role');
+          return {
+            'success': true,
+            'data': data,
+            'actual_role': userType,
+            'requested_role': role,
+            'is_mismatch': true,
+            'requires_2fa': false
+          };
+        }
+
+        print('🟢 Login successful!');
+        return {'success': true, 'data': data, 'is_mismatch': false, 'requires_2fa': false};
       } else {
-        print('🔴 Login failed');
-        return {'success': false, 'error': 'Invalid credentials'};
+        print('🔴 Login failed: ${response.body}');
+        final error =
+            jsonDecode(response.body)['error'] ?? 'Invalid credentials';
+        return {'success': false, 'error': error};
       }
     } catch (e) {
       print('🔴 Login error: $e');
+      return {
+        'success': false,
+        'error':
+            'Network connection error. Please ensure the server is running and accessible at $baseUrl'
+      };
+    }
+  }
+
+  Future<Map<String, dynamic>> setup2FA() async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.get(
+        Uri.parse('$baseUrl/auth/setup-2fa/'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      } else {
+        return {'success': false, 'error': jsonDecode(response.body)['error'] ?? 'Setup failed'};
+      }
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> enable2FA(String otpCode) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.post(
+        Uri.parse('$baseUrl/auth/enable-2fa/'),
+        headers: headers,
+        body: jsonEncode({'otp_code': otpCode}),
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'message': jsonDecode(response.body)['message']};
+      } else {
+        return {'success': false, 'error': jsonDecode(response.body)['error'] ?? 'Enable failed'};
+      }
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> disable2FA() async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.post(
+        Uri.parse('$baseUrl/auth/disable-2fa/'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'message': jsonDecode(response.body)['message']};
+      } else {
+        return {'success': false, 'error': jsonDecode(response.body)['error'] ?? 'Disable failed'};
+      }
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> verify2FA({
+    required String username,
+    required String otpCode,
+  }) async {
+    try {
+      final headers = await getHeaders(requireAuth: false);
+      final response = await http.post(
+        Uri.parse('$baseUrl/auth/verify-2fa/'),
+        headers: headers,
+        body: jsonEncode({
+          'username': username,
+          'otp_code': otpCode,
+          'purpose': 'login',
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        await saveToken(data['token']);
+        await saveUserId(data['user_id']);
+        return {'success': true, 'data': data};
+      } else {
+        final error = jsonDecode(response.body)['error'] ?? 'Invalid code';
+        return {'success': false, 'error': error};
+      }
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  /// Request OTP for password reset
+  Future<Map<String, dynamic>> requestPasswordResetOTP(String email) async {
+    try {
+      final headers = await getHeaders(requireAuth: false);
+      final response = await http.post(
+        Uri.parse('$baseUrl/auth/password-reset-otp/'),
+        headers: headers,
+        body: jsonEncode({'email': email}),
+      );
+      
+      // Check if response is JSON
+      if (response.headers['content-type']?.contains('application/json') ?? false) {
+        if (response.statusCode == 200) {
+          print('🟢 Password reset OTP sent to $email');
+          return {'success': true, 'message': jsonDecode(response.body)['message']};
+        } else {
+          final error = jsonDecode(response.body)['error'] ?? 'Failed to send reset code';
+          print('🔴 Password reset OTP failed: $error');
+          return {'success': false, 'error': error};
+        }
+      } else {
+        print('🔴 Received non-JSON response: ${response.body}');
+        return {'success': false, 'error': 'Server Error: Received HTML instead of JSON. Please check if the server is running correctly.'};
+      }
+    } catch (e) {
+      print('🔴 requestPasswordResetOTP error: $e');
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  /// Reset password by verifying OTP
+  Future<Map<String, dynamic>> resetPassword({
+    required String email,
+    required String otpCode,
+    required String newPassword,
+  }) async {
+    try {
+      final headers = await getHeaders(requireAuth: false);
+      final response = await http.post(
+        Uri.parse('$baseUrl/auth/password-reset/'),
+        headers: headers,
+        body: jsonEncode({
+          'email': email,
+          'otp_code': otpCode,
+          'new_password': newPassword,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        print('🟢 Password reset successful for $email');
+        return {'success': true};
+      } else {
+        final error = jsonDecode(response.body)['error'] ?? 'Failed to reset password';
+        print('🔴 Password reset failed for $email: $error');
+        return {'success': false, 'error': error};
+      }
+    } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
     }
   }
@@ -190,7 +433,6 @@ class ApiService {
       return {'success': true};
     }
   }
-
 
   // ==================== USER ====================
 
@@ -239,8 +481,10 @@ class ApiService {
       if (state != null) body['state'] = state;
       if (zipCode != null) body['zip_code'] = zipCode;
       if (dateOfBirth != null) body['date_of_birth'] = dateOfBirth;
-      if (emergencyContactName != null) body['emergency_contact_name'] = emergencyContactName;
-      if (emergencyContactPhone != null) body['emergency_contact_phone'] = emergencyContactPhone;
+      if (emergencyContactName != null)
+        body['emergency_contact_name'] = emergencyContactName;
+      if (emergencyContactPhone != null)
+        body['emergency_contact_phone'] = emergencyContactPhone;
       final response = await http.patch(
         Uri.parse('$baseUrl/users/me/'),
         headers: headers,
@@ -250,7 +494,9 @@ class ApiService {
         final data = jsonDecode(response.body);
         return {'success': true, 'data': data};
       }
-      final err = response.body.isNotEmpty ? jsonDecode(response.body) : {'detail': 'Update failed'};
+      final err = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : {'detail': 'Update failed'};
       return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -258,7 +504,8 @@ class ApiService {
   }
 
   /// Update caretaker-specific profile data
-  Future<Map<String, dynamic>> updateCaretakerProfile(Map<String, dynamic> data) async {
+  Future<Map<String, dynamic>> updateCaretakerProfile(
+      Map<String, dynamic> data) async {
     try {
       final headers = await getHeaders();
       final response = await http.patch(
@@ -276,7 +523,8 @@ class ApiService {
   }
 
   /// Update volunteer-specific profile data
-  Future<Map<String, dynamic>> updateVolunteerProfile(Map<String, dynamic> data) async {
+  Future<Map<String, dynamic>> updateVolunteerProfile(
+      Map<String, dynamic> data) async {
     try {
       final headers = await getHeaders();
       final response = await http.patch(
@@ -293,18 +541,40 @@ class ApiService {
     }
   }
 
+  /// Update user's preferred language for AI Buddy
+  Future<Map<String, dynamic>> updateLanguage(String languageCode) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.post(
+        Uri.parse('$baseUrl/update-language/'),
+        headers: headers,
+        body: jsonEncode({'language': languageCode}),
+      );
+
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': jsonDecode(response.body)};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
   /// Update senior-specific profile data with optional photo.
   /// Usually called by the family member managing the senior.
-  Future<Map<String, dynamic>> updateSeniorProfile(int id, Map<String, dynamic> data, {dynamic photoFile}) async {
+  Future<Map<String, dynamic>> updateSeniorProfile(
+      int id, Map<String, dynamic> data,
+      {dynamic photoFile}) async {
     try {
       final token = await getToken();
       if (token == null) return {'success': false, 'error': 'No token'};
 
       if (photoFile != null) {
         // Use MultipartRequest for photo upload
-        var request = http.MultipartRequest('PATCH', Uri.parse('$baseUrl/seniors/$id/update/'));
+        var request = http.MultipartRequest(
+            'PATCH', Uri.parse('$baseUrl/seniors/$id/update/'));
         request.headers['Authorization'] = 'Token $token';
-        
+
         // Add text fields
         data.forEach((key, value) {
           request.fields[key] = value.toString();
@@ -312,9 +582,11 @@ class ApiService {
 
         // Add photo
         if (photoFile is String) {
-          request.files.add(await http.MultipartFile.fromPath('photo', photoFile));
+          request.files
+              .add(await http.MultipartFile.fromPath('photo', photoFile));
         } else if (photoFile is File) {
-          request.files.add(await http.MultipartFile.fromPath('photo', photoFile.path));
+          request.files
+              .add(await http.MultipartFile.fromPath('photo', photoFile.path));
         }
 
         var streamedResponse = await request.send();
@@ -323,7 +595,10 @@ class ApiService {
         if (response.statusCode == 200) {
           return {'success': true, 'data': jsonDecode(response.body)};
         } else {
-          return {'success': false, 'error': 'Update failed: ${response.statusCode} - ${response.body}'};
+          return {
+            'success': false,
+            'error': 'Update failed: ${response.statusCode} - ${response.body}'
+          };
         }
       } else {
         // Regular JSON request
@@ -365,9 +640,11 @@ class ApiService {
       final token = await getToken();
       if (token == null) return {'success': false, 'error': 'No token'};
 
-      var request = http.MultipartRequest('PATCH', Uri.parse('$baseUrl/users/me/'));
+      var request =
+          http.MultipartRequest('PATCH', Uri.parse('$baseUrl/users/me/'));
       request.headers['Authorization'] = 'Token $token';
-      request.files.add(await http.MultipartFile.fromPath('profile_picture', filePath));
+      request.files
+          .add(await http.MultipartFile.fromPath('profile_picture', filePath));
 
       var streamedResponse = await request.send();
       var response = await http.Response.fromStream(streamedResponse);
@@ -375,7 +652,10 @@ class ApiService {
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       } else {
-        return {'success': false, 'error': 'Upload failed: ${response.statusCode}'};
+        return {
+          'success': false,
+          'error': 'Upload failed: ${response.statusCode}'
+        };
       }
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -480,7 +760,10 @@ class ApiService {
         return {'success': true, 'data': data};
       } else {
         final error = jsonDecode(response.body);
-        return {'success': false, 'error': error['error'] ?? 'Connection failed'};
+        return {
+          'success': false,
+          'error': error['error'] ?? 'Connection failed'
+        };
       }
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -571,6 +854,7 @@ class ApiService {
       final body = {
         'senior': seniorId,
         'caretaker': caretakerId,
+        'is_active': true,
       };
 
       final response = await http.post(
@@ -579,10 +863,26 @@ class ApiService {
         body: jsonEncode(body),
       );
 
+      final data = jsonDecode(response.body);
       if (response.statusCode == 201) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        return {'success': true, 'data': data};
       }
-      return {'success': false, 'error': jsonDecode(response.body)};
+      
+      // Handle the common "object does not exist" error clearly
+      String errorMsg = 'Assignment failed';
+      if (data is Map) {
+        if (data.containsKey('caretaker')) {
+          errorMsg = 'This caretaker is no longer available or was not found.';
+        } else if (data.containsKey('senior')) {
+          errorMsg = 'The selected senior profile was not found.';
+        } else {
+          errorMsg = data.toString();
+        }
+      } else {
+        errorMsg = data.toString();
+      }
+
+      return {'success': false, 'error': errorMsg};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
     }
@@ -592,15 +892,14 @@ class ApiService {
     return await getList('caretakers/available/');
   }
 
-
-
   // ==================== APPOINTMENTS ====================
 
   /// Parses API response as list. Handles both { results: [] } and raw list from Django.
   static List<dynamic> parseListResponse(dynamic data) {
     if (data == null) return [];
     if (data is List) return List<dynamic>.from(data);
-    if (data is Map && data.containsKey('results')) return List<dynamic>.from(data['results'] as List);
+    if (data is Map && data.containsKey('results'))
+      return List<dynamic>.from(data['results'] as List);
     return [];
   }
 
@@ -632,20 +931,35 @@ class ApiService {
   }) async {
     try {
       final headers = await getHeaders();
+      final body = {
+        'senior': seniorId,
+        'caretaker': caretakerId,
+        'start_date': DateTime.now().toLocal().toIso8601String().split('T')[0],
+        'is_active': true,
+      };
+
       final response = await http.post(
         Uri.parse('$baseUrl/care-assignments/'),
         headers: headers,
-        body: jsonEncode({
-          'senior': seniorId,
-          'caretaker': caretakerId,
-          'start_date': DateTime.now().toLocal().toIso8601String().split('T')[0],
-          'is_active': true,
-        }),
+        body: jsonEncode(body),
       );
+
+      final data = jsonDecode(response.body);
       if (response.statusCode == 201) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        return {'success': true, 'data': data};
       }
-      return {'success': false, 'error': jsonDecode(response.body)};
+
+      // Handle the common "object does not exist" error clearly
+      String errorMsg = 'Assignment failed';
+      if (data is Map) {
+        if (data.containsKey('caretaker')) {
+          errorMsg = 'This caretaker is no longer available or was not found.';
+        } else {
+          errorMsg = data.toString();
+        }
+      }
+
+      return {'success': false, 'error': errorMsg};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
     }
@@ -727,8 +1041,10 @@ class ApiService {
           'appointment_date': appointmentDate,
           'appointment_time': appointmentTime,
           'location': location,
-          if (doctorName != null && doctorName.isNotEmpty) 'doctor_name': doctorName,
-          if (description != null && description.isNotEmpty) 'description': description,
+          if (doctorName != null && doctorName.isNotEmpty)
+            'doctor_name': doctorName,
+          if (description != null && description.isNotEmpty)
+            'description': description,
           'duration_minutes': 30,
           'status': 'scheduled',
         }),
@@ -750,7 +1066,8 @@ class ApiService {
   }
 
   /// Update appointment (date, time, title, etc.). Pass only fields to change.
-  Future<Map<String, dynamic>> updateAppointment(int id, {
+  Future<Map<String, dynamic>> updateAppointment(
+    int id, {
     String? title,
     String? appointmentType,
     String? appointmentDate,
@@ -779,7 +1096,9 @@ class ApiService {
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      final err = response.body.isNotEmpty ? jsonDecode(response.body) : {'detail': 'Update failed'};
+      final err = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : {'detail': 'Update failed'};
       return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -787,12 +1106,15 @@ class ApiService {
   }
 
   /// Set appointment status: 'scheduled' | 'completed' | 'cancelled'
-  Future<Map<String, dynamic>> updateAppointmentStatus(int id, String status) async {
+  Future<Map<String, dynamic>> updateAppointmentStatus(
+      int id, String status) async {
     try {
       final headers = await getHeaders();
       String endpoint = '';
-      if (status == 'completed') endpoint = 'complete';
-      else if (status == 'cancelled') endpoint = 'cancel';
+      if (status == 'completed')
+        endpoint = 'complete';
+      else if (status == 'cancelled')
+        endpoint = 'cancel';
       else if (status == 'confirmed') endpoint = 'confirm';
 
       if (endpoint.isNotEmpty) {
@@ -803,7 +1125,9 @@ class ApiService {
         if (response.statusCode == 200 || response.statusCode == 201) {
           return {'success': true, 'data': jsonDecode(response.body)};
         }
-        final err = response.body.isNotEmpty ? jsonDecode(response.body) : {'detail': 'Action failed'};
+        final err = response.body.isNotEmpty
+            ? jsonDecode(response.body)
+            : {'detail': 'Action failed'};
         return {'success': false, 'error': err};
       }
 
@@ -816,7 +1140,9 @@ class ApiService {
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      final err = response.body.isNotEmpty ? jsonDecode(response.body) : {'detail': 'Update failed'};
+      final err = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : {'detail': 'Update failed'};
       return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -846,6 +1172,7 @@ class ApiService {
         return {'success': false, 'error': 'Failed to get medicines'};
       }
     } catch (e) {
+      print('🔴 Error getting medicines: $e');
       return {'success': false, 'error': 'Connection error: $e'};
     }
   }
@@ -892,12 +1219,13 @@ class ApiService {
 
       final headers = await getHeaders();
       final body = {
-        'senior': seniorId,  // This is the key - must match Django model
+        'senior': seniorId, // This is the key - must match Django model
         'medicine_name': medicineName,
         'dosage': dosage,
         'is_active': isActive,
         // Ensure frequency and start_date are sent since Django requires them
-        'frequency': (frequency != null && frequency.isNotEmpty) ? frequency : 'daily',
+        'frequency':
+            (frequency != null && frequency.isNotEmpty) ? frequency : 'daily',
       };
 
       if (timeOfDay != null && timeOfDay.isNotEmpty) {
@@ -911,7 +1239,8 @@ class ApiService {
         body['start_date'] = startDate;
       } else {
         final now = DateTime.now();
-        body['start_date'] = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        body['start_date'] =
+            '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
       }
       if (endDate != null && endDate.isNotEmpty) {
         body['end_date'] = endDate;
@@ -939,9 +1268,24 @@ class ApiService {
           : {'detail': 'Failed to add medicine'};
       print('🔴 Error: $err');
       return {'success': false, 'error': err};
-
     } catch (e) {
       print('🔴 Exception: $e');
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }  /// Update medicine properties (like status, name, etc.)
+  Future<Map<String, dynamic>> updateMedicineStatus(int id, Map<String, dynamic> data) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.patch(
+        Uri.parse('$baseUrl/medicines/$id/'),
+        headers: headers,
+        body: jsonEncode(data),
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': jsonDecode(response.body)};
+    } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
     }
   }
@@ -1011,7 +1355,10 @@ class ApiService {
         return {'success': true, 'data': jsonDecode(response.body)};
       } else {
         final err = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-        return {'success': false, 'error': err['error'] ?? 'Failed to load caretaker'};
+        return {
+          'success': false,
+          'error': err['error'] ?? 'Failed to load caretaker'
+        };
       }
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -1047,14 +1394,19 @@ class ApiService {
         print('🟢 Alert created!');
         return {'success': true, 'data': data};
       } else {
-        return {'success': false, 'error': 'Failed to create alert'};
+        dynamic errorData;
+        try {
+          errorData = jsonDecode(response.body);
+        } catch (_) {
+          errorData = response.body;
+        }
+        return {'success': false, 'error': errorData ?? 'Failed to create alert'};
       }
     } catch (e) {
       print('🔴 Error: $e');
       return {'success': false, 'error': 'Connection error: $e'};
     }
   }
-
 
   // ==================== VOLUNTEER TASKS ====================
 
@@ -1168,7 +1520,8 @@ class ApiService {
           'description': description,
         }),
       );
-      if (response.statusCode == 201) return {'success': true, 'data': jsonDecode(response.body)};
+      if (response.statusCode == 201)
+        return {'success': true, 'data': jsonDecode(response.body)};
       return {'success': false, 'error': jsonDecode(response.body)};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -1178,8 +1531,11 @@ class ApiService {
   Future<Map<String, dynamic>> acceptHelpRequest(int id) async {
     try {
       final headers = await getHeaders();
-      final response = await http.post(Uri.parse('$baseUrl/help-requests/$id/accept/'), headers: headers);
-      if (response.statusCode == 200) return {'success': true, 'data': jsonDecode(response.body)};
+      final response = await http.post(
+          Uri.parse('$baseUrl/help-requests/$id/accept/'),
+          headers: headers);
+      if (response.statusCode == 200)
+        return {'success': true, 'data': jsonDecode(response.body)};
       return {'success': false, 'error': jsonDecode(response.body)};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -1189,8 +1545,11 @@ class ApiService {
   Future<Map<String, dynamic>> completeHelpRequest(int id) async {
     try {
       final headers = await getHeaders();
-      final response = await http.post(Uri.parse('$baseUrl/help-requests/$id/complete/'), headers: headers);
-      if (response.statusCode == 200) return {'success': true, 'data': jsonDecode(response.body)};
+      final response = await http.post(
+          Uri.parse('$baseUrl/help-requests/$id/complete/'),
+          headers: headers);
+      if (response.statusCode == 200)
+        return {'success': true, 'data': jsonDecode(response.body)};
       return {'success': false, 'error': jsonDecode(response.body)};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -1200,8 +1559,11 @@ class ApiService {
   Future<Map<String, dynamic>> verifyHelpRequest(int id) async {
     try {
       final headers = await getHeaders();
-      final response = await http.post(Uri.parse('$baseUrl/help-requests/$id/verify/'), headers: headers);
-      if (response.statusCode == 200) return {'success': true, 'data': jsonDecode(response.body)};
+      final response = await http.post(
+          Uri.parse('$baseUrl/help-requests/$id/verify/'),
+          headers: headers);
+      if (response.statusCode == 200)
+        return {'success': true, 'data': jsonDecode(response.body)};
       return {'success': false, 'error': jsonDecode(response.body)};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -1218,10 +1580,38 @@ class ApiService {
   Future<Map<String, dynamic>> triggerVolunteerEmergency(int? seniorId) async {
     try {
       final headers = await getHeaders();
-      final body = seniorId != null ? jsonEncode({'senior': seniorId}) : jsonEncode({});
-      final response = await http.post(Uri.parse('$baseUrl/emergency/'), headers: headers, body: body);
-      if (response.statusCode == 201) return {'success': true, 'data': jsonDecode(response.body)};
-      return {'success': false, 'error': jsonDecode(response.body)};
+      final body =
+          seniorId != null ? jsonEncode({'senior': seniorId}) : jsonEncode({});
+      final response = await http.post(Uri.parse('$baseUrl/emergency/'),
+          headers: headers, body: body);
+
+      if (response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+
+      // Parse error safely - could be HTML if server crashed/missed route
+      Map<String, dynamic> errorData = {};
+      try {
+        errorData = jsonDecode(response.body);
+      } catch (e) {
+        errorData = {'error': 'Server Error (${response.statusCode})'};
+      }
+
+      if (response.statusCode == 401) {
+        await clearStorage();
+        return {
+          'success': false,
+          'error': 'Invalid Session',
+          'needs_reconnect': true
+        };
+      }
+
+      return {
+        'success': false,
+        'error': errorData['error'] ??
+            errorData['detail'] ??
+            'Failed to trigger emergency'
+      };
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
     }
@@ -1230,8 +1620,10 @@ class ApiService {
   Future<Map<String, dynamic>> acceptVolunteerEmergency(int id) async {
     try {
       final headers = await getHeaders();
-      final response = await http.post(Uri.parse('$baseUrl/emergency/$id/accept/'), headers: headers);
-      if (response.statusCode == 200) return {'success': true, 'data': jsonDecode(response.body)};
+      final response = await http
+          .post(Uri.parse('$baseUrl/emergency/$id/accept/'), headers: headers);
+      if (response.statusCode == 200)
+        return {'success': true, 'data': jsonDecode(response.body)};
       return {'success': false, 'error': jsonDecode(response.body)};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -1239,37 +1631,52 @@ class ApiService {
   }
 
   // Chat
-  Future<Map<String, dynamic>> sendMessage(int receiverId, String message) async {
+  Future<Map<String, dynamic>> sendMessage(
+      int receiverId, String message, {int? helpRequestId}) async {
     try {
       final headers = await getHeaders();
+      final body = {
+        'receiver': receiverId, 
+        'message': message,
+        if (helpRequestId != null) 'help_request': helpRequestId,
+      };
       final response = await http.post(
         Uri.parse('$baseUrl/messages/send/'),
         headers: headers,
-        body: jsonEncode({'receiver': receiverId, 'message': message}),
+        body: jsonEncode(body),
       );
-      if (response.statusCode == 201) return {'success': true, 'data': jsonDecode(response.body)};
+      if (response.statusCode == 201)
+        return {'success': true, 'data': jsonDecode(response.body)};
       return {'success': false, 'error': jsonDecode(response.body)};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
     }
   }
 
-  Future<Map<String, dynamic>> getConversation(int userId) async {
+  Future<Map<String, dynamic>> getConversation(int userId, {int? helpRequestId}) async {
     try {
       final headers = await getHeaders();
-      print('🔵 Fetching conversation with user $userId...');
-      final response = await http.get(Uri.parse('$baseUrl/messages/$userId/'), headers: headers);
-      print('🟢 Conversation Response (Status ${response.statusCode}): ${response.body}');
-      if (response.statusCode == 200) return {'success': true, 'data': jsonDecode(response.body)};
-      return {'success': false, 'error': 'Failed to load messages (Status ${response.statusCode})'};
+      String url = '$baseUrl/messages/$userId/';
+      if (helpRequestId != null) {
+        url += '?help_request=$helpRequestId';
+      }
+      print('🔵 Fetching conversation with user $userId (Request: $helpRequestId)...');
+      final response = await http.get(Uri.parse(url), headers: headers);
+      if (response.statusCode == 200)
+        return {'success': true, 'data': jsonDecode(response.body)};
+      return {
+        'success': false,
+        'error': 'Failed to load messages (Status ${response.statusCode})'
+      };
     } catch (e) {
-      print('🔴 Connection error fetching conversation: $e');
       return {'success': false, 'error': 'Connection error: $e'};
     }
   }
 
   // Rating
-  Future<Map<String, dynamic>> giveRating(int volunteerId, int rating, String feedback, {int? helpRequestId, int? seniorId}) async {
+  Future<Map<String, dynamic>> giveRating(
+      int volunteerId, int rating, String feedback,
+      {int? helpRequestId, int? seniorId}) async {
     try {
       final headers = await getHeaders();
       final body = {
@@ -1279,13 +1686,14 @@ class ApiService {
         if (helpRequestId != null) 'help_request': helpRequestId,
         if (seniorId != null) 'senior': seniorId,
       };
-      
+
       final response = await http.post(
         Uri.parse('$baseUrl/rating/give_rating/'),
         headers: headers,
         body: jsonEncode(body),
       );
-      if (response.statusCode == 200) return {'success': true, 'data': jsonDecode(response.body)};
+      if (response.statusCode == 200)
+        return {'success': true, 'data': jsonDecode(response.body)};
       return {'success': false, 'error': jsonDecode(response.body)};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
@@ -1297,16 +1705,44 @@ class ApiService {
     try {
       final headers = await getHeaders();
       print('🔵 Fetching volunteer dashboard...');
-      final response = await http.get(Uri.parse('$baseUrl/volunteer/dashboard/'), headers: headers);
-      print('🟢 Dashboard Response (Status ${response.statusCode}): ${response.body}');
-      if (response.statusCode == 200) return {'success': true, 'data': jsonDecode(response.body)};
-      return {'success': false, 'error': 'Failed to load dashboard (Status ${response.statusCode})'};
+      final response = await http
+          .get(Uri.parse('$baseUrl/volunteer/dashboard/'), headers: headers);
+      if (response.statusCode == 200)
+        return {'success': true, 'data': jsonDecode(response.body)};
+      return {
+        'success': false,
+        'error': 'Failed to load dashboard (Status ${response.statusCode})'
+      };
     } catch (e) {
-      print('🔴 Connection error fetching dashboard: $e');
       return {'success': false, 'error': 'Connection error: $e'};
     }
   }
 
+  Future<Map<String, dynamic>> getVolunteerLeaderboard() async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.get(Uri.parse('$baseUrl/volunteer/leaderboard/'), headers: headers);
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load leaderboard'};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVolunteerProofOfService() async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.get(Uri.parse('$baseUrl/volunteer/proof-of-service/'), headers: headers);
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load proof of service'};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
 
   // ==================== DASHBOARD STATS ====================
 
@@ -1332,7 +1768,6 @@ class ApiService {
     }
   }
 
-
   // ==================== NOTIFICATIONS ====================
 
   Future<Map<String, dynamic>> getNotifications() async {
@@ -1349,6 +1784,40 @@ class ApiService {
       } else {
         return {'success': false, 'error': 'Failed to get notifications'};
       }
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> markNotificationRead(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.post(
+        Uri.parse('$baseUrl/notifications/$id/mark-read/'),
+        headers: headers,
+      );
+
+      if (response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to mark read'};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteNotification(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.delete(
+        Uri.parse('$baseUrl/notifications/$id/'),
+        headers: headers,
+      );
+
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete'};
     } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
     }
@@ -1373,7 +1842,8 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> markNotificationAsRead(int notificationId) async {
+  Future<Map<String, dynamic>> markNotificationAsRead(
+      int notificationId) async {
     try {
       final headers = await getHeaders();
       final response = await http.post(
@@ -1496,7 +1966,8 @@ class ApiService {
         if (weight != null) 'weight': weight,
         if (oxygenLevel != null) 'oxygen_level': oxygenLevel,
         'record_date': DateTime.now().toIso8601String().split('T')[0],
-        'record_time': DateTime.now().toIso8601String().split('T')[1].split('.')[0],
+        'record_time':
+            DateTime.now().toIso8601String().split('T')[1].split('.')[0],
       };
 
       final response = await http.post(
@@ -1550,56 +2021,41 @@ class ApiService {
     }
   }
 
-  // ==================== 🔥 FIXED: REGENERATE PAIR CODE ====================
-
+  /// Regenerate the 6-digit pair code for a senior.
+  /// Requires managing family member's password.
   Future<Map<String, dynamic>> regeneratePairCode(
       int seniorId, String password) async {
     try {
       print('🔵 Regenerating pair code for senior ID: $seniorId');
-
       final headers = await getHeaders();
-
       final response = await http.post(
         Uri.parse('$baseUrl/seniors/$seniorId/regenerate_pair_code/'),
         headers: headers,
-        body: jsonEncode({
-          'password': password,
-        }),
+        body: jsonEncode({'password': password}),
       );
 
-      print('Status: ${response.statusCode}');
-      print('Body: ${response.body}');
+      print('Response status: ${response.statusCode}');
+      print('Response body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-
-        return {
-          'success': true,
-          'pair_code': data['pair_code']?.toString() ?? '',
-        };
+        print('🟢 Pair code regenerated successfully!');
+        return {'success': true, 'pair_code': data['pair_code']};
       } else {
-        dynamic error;
-        try {
-          error = jsonDecode(response.body);
-        } catch (_) {
-          error = response.body;
-        }
-
+        final error = jsonDecode(response.body);
         return {
           'success': false,
-          'error': error['error'] ?? 'Failed to regenerate code',
+          'error': error['error'] ?? 'Regeneration failed'
         };
       }
     } catch (e) {
-      return {
-        'success': false,
-        'error': 'Connection error: $e',
-      };
+      return {'success': false, 'error': 'Connection error: $e'};
     }
   }
 
   // ==================== ALIAS HELPERS ====================
 
+  /// Alias for getTasks() — used by VolunteerHomeScreen
   Future<Map<String, dynamic>> getVolunteerTasks() => getTasks();
 
   // ==================== USER TYPE STORAGE ====================
@@ -1613,5 +2069,169 @@ class ApiService {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('user_type');
   }
-}
 
+  // ==================== NEW CRUD METHODS ====================
+
+  Future<Map<String, dynamic>> updateMedicine(int id, Map<String, dynamic> data) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.patch(
+        Uri.parse('$baseUrl/medicines/$id/'),
+        headers: headers,
+        body: jsonEncode(data),
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': jsonDecode(response.body)};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteMedicine(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.delete(
+        Uri.parse('$baseUrl/medicines/$id/'),
+        headers: headers,
+      );
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete medicine'};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteAppointment(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.delete(
+        Uri.parse('$baseUrl/appointments/$id/'),
+        headers: headers,
+      );
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete appointment'};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateDoctor(int id, Map<String, dynamic> data) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.patch(
+        Uri.parse('$baseUrl/doctors/$id/'),
+        headers: headers,
+        body: jsonEncode(data),
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': jsonDecode(response.body)};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteDoctor(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.delete(
+        Uri.parse('$baseUrl/doctors/$id/'),
+        headers: headers,
+      );
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete doctor'};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateEmergencyContact(int id, Map<String, dynamic> data) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.patch(
+        Uri.parse('$baseUrl/emergency-contacts/$id/'),
+        headers: headers,
+        body: jsonEncode(data),
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': jsonDecode(response.body)};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteEmergencyContact(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.delete(
+        Uri.parse('$baseUrl/emergency-contacts/$id/'),
+        headers: headers,
+      );
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete contact'};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteDailyActivity(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.delete(
+        Uri.parse('$baseUrl/daily-activities/$id/'),
+        headers: headers,
+      );
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete activity'};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteHealthRecord(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.delete(
+        Uri.parse('$baseUrl/health-records/$id/'),
+        headers: headers,
+      );
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete record'};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> removeCareAssignment(int id) async {
+    try {
+      final headers = await getHeaders();
+      final response = await http.delete(
+        Uri.parse('$baseUrl/care-assignments/$id/'),
+        headers: headers,
+      );
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to remove care assignment'};
+    } catch (e) {
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+}
